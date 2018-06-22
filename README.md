@@ -8,6 +8,11 @@ Python implementation of "[A New Image Contrast Enhancement Algorithm Using Expo
 - matplotlib
 - cv2
 
+### Usage
+```
+python main.py <input image>
+```
+
 ### Results
 <p align='center'>
   <img src='testdata/01.jpg' height='256' width='192'/>
