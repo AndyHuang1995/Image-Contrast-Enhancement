@@ -4,7 +4,7 @@ Python implementations of "[A New Image Contrast Enhancement Algorithm Using Exp
 ### Already Implemented
 - histogram equalization(he)
 - dynamic histogram equalization(dhe)
-- A New Image Contrast Enhancement Algorithm Using Exposure Fusion Framework (thier work)
+- A New Image Contrast Enhancement Algorithm Using Exposure Fusion Framework
 
 ### Requirements
 - scipy
