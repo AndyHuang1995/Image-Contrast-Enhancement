@@ -60,7 +60,7 @@ def tsmooth(img, lamda=0.01, sigma=3.0, sharpness=0.001):
 def rgb2gm(I):
     if (I.shape[2] == 3):
         I = cv2.normalize(I.astype('float64'), None, 0.0, 1.0, cv2.NORM_MINMAX)
-        I = (I[:,:,0]*I[:,:,1]*I[:,:,2])**(1/3)
+        I = np.abs((I[:,:,0]*I[:,:,1]*I[:,:,2]))**(1/3)
 
     return I
 
