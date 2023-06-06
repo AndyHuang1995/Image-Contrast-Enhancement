@@ -4,6 +4,7 @@ import imageio
 import scipy, scipy.misc, scipy.signal
 import cv2
 import sys
+from PIL import Image
 
 def computeTextureWeights(fin, sigma, sharpness):
     dt0_v = np.vstack((np.diff(fin, n=1, axis=0), fin[0,:]-fin[-1,:]))
@@ -90,7 +91,7 @@ def maxEntropyEnhance(I, isBad, a=-0.3293, b=1.1258):
     Y = rgb2gm(tmp)
     
     isBad = isBad * 1
-    isBad = scipy.misc.imresize(isBad, (50,50), interp='bicubic', mode='F')
+    isBad = np.array(Image.fromarray(isBad, mode="F").resize((50, 50), Image.BICUBIC))
     isBad[isBad<0.5] = 0
     isBad[isBad>=0.5] = 1
     Y = Y[isBad==1]
@@ -114,7 +115,8 @@ def Ying_2017_CAIP(img, mu=0.5, a=-0.3293, b=1.1258):
 
     # Weight matrix estimation
     t_b = np.max(I, axis=2)
-    t_our = cv2.resize(tsmooth(scipy.misc.imresize(t_b, 0.5, interp='bicubic', mode='F'), lamda, sigma), (t_b.shape[1], t_b.shape[0]), interpolation=cv2.INTER_AREA)
+    resized = np.array(Image.fromarray(t_b, mode="F").resize((t_b.shape[1]//2, t_b.shape[0]//2), Image.BICUBIC))
+    t_our = cv2.resize(tsmooth(resized, lamda, sigma), (t_b.shape[1], t_b.shape[0]), interpolation=cv2.INTER_AREA)
     
     # Apply camera model with k(exposure ratio)
     isBad = t_our < 0.5
