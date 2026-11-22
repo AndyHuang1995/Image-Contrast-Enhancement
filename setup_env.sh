@@ -112,25 +112,18 @@ import imageio
 import imageio.v3 as iio
 import matplotlib
 import numpy as np
-import PIL
-from PIL import Image
 import scipy
-from scipy import optimize, signal, sparse
+from scipy import optimize, sparse
 from scipy.sparse.linalg import spsolve
-import skimage
-from skimage import exposure
 
-assert hasattr(Image, "Resampling"), "Pillow >= 9.1 required for Image.Resampling"
 assert hasattr(iio, "imread"), "imageio.v3.imread required"
 
-print(f"  Python      : {sys.version.split()[0]}")
-print(f"  numpy       : {np.__version__}")
-print(f"  scipy       : {scipy.__version__}")
-print(f"  opencv      : {cv2.__version__}")
-print(f"  scikit-image: {skimage.__version__}")
-print(f"  matplotlib  : {matplotlib.__version__}")
-print(f"  imageio     : {imageio.__version__}")
-print(f"  pillow      : {PIL.__version__}")
+print(f"  Python    : {sys.version.split()[0]}")
+print(f"  numpy     : {np.__version__}")
+print(f"  scipy     : {scipy.__version__}")
+print(f"  opencv    : {cv2.__version__}")
+print(f"  matplotlib: {matplotlib.__version__}")
+print(f"  imageio   : {imageio.__version__}")
 PY
 
 cat <<EOF

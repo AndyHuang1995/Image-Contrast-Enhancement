@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
     [
         ("01.jpg", 6.0),
         ("02.jpg", 3.5),
-        ("03.jpg", 5.0),
+        ("03.jpg", 6.0),
         ("04.jpg", 3.5),
     ],
 )

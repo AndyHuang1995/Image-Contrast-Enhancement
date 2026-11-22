@@ -4,21 +4,19 @@ from pathlib import Path
 import cv2
 import imageio.v3 as iio
 import numpy as np
-from PIL import Image
 from scipy import optimize, sparse
 from scipy.sparse.linalg import spsolve
 
 
 def imresize_bicubic(arr, size):
     """Resize a 2D array with bicubic interpolation (replaces removed scipy.misc.imresize)."""
-    pil_img = Image.fromarray(np.asarray(arr, dtype=np.float32))
+    arr_f32 = np.asarray(arr, dtype=np.float32)
     if isinstance(size, (int, float)):
-        new_h = max(1, int(arr.shape[0] * size))
-        new_w = max(1, int(arr.shape[1] * size))
+        new_h = max(1, int(arr_f32.shape[0] * size))
+        new_w = max(1, int(arr_f32.shape[1] * size))
     else:
         new_h, new_w = int(size[0]), int(size[1])
-    resized = pil_img.resize((new_w, new_h), resample=Image.Resampling.BICUBIC)
-    return np.array(resized, dtype=np.float32)
+    return cv2.resize(arr_f32, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
 
 def _box_sum_1d(arr, kernel_size, axis):

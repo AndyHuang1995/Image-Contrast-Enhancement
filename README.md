@@ -11,10 +11,8 @@ Python implementations of "[A New Image Contrast Enhancement Algorithm Using Exp
 - `numpy>=1.26.0,<3.0.0`
 - `scipy>=1.13.0,<2.0.0`
 - `opencv-python>=4.10.0,<5.0.0`
-- `scikit-image>=0.24.0,<1.0.0`
 - `matplotlib>=3.9.0,<4.0.0`
 - `imageio>=2.34.0,<3.0.0`
-- `pillow>=10.4.0,<13.0.0`
 
 ### Environment Setup
 
@@ -87,10 +85,10 @@ All three scripts also support grayscale and RGBA (preserving the alpha channel)
 ### Modernization & API Migration Notes
 The codebase has been updated from its original 2020 dependencies (`scipy==1.2.2`, `numpy==1.18.2`, `imageio==2.8.0`, etc.) to modern Python & library versions:
 
-- **`scipy.misc.imresize` (removed in SciPy 1.3+)** → Replaced in `ying.py` with `imresize_bicubic()` using Pillow's `Image.fromarray(..., float32)` + `Image.Resampling.BICUBIC`.
+- **`scipy.misc.imresize` (removed in SciPy 1.3+)** → Replaced in `ying.py` with `imresize_bicubic()` using `cv2.resize(..., interpolation=cv2.INTER_CUBIC)`, removing direct Pillow and scikit-image dependencies.
 - **Explicit SciPy submodule imports (SciPy 1.12+)** → Replaced implicit `scipy.sparse` / `scipy.optimize` access and removed deprecated `scipy.misc` imports; direct solver converts `A` to CSC format (`.tocsc()`) to eliminate `SparseEfficiencyWarning`.
 - **`imageio.imread` (deprecated in ImageIO v2/v3)** → Migrated to `imageio.v3` (`iio.imread` / `iio.imwrite`) across `he.py`, `dhe.py`, and `ying.py`.
-- **NumPy 2.x / Pillow 11+ compatibility** → Fixed float kernel sizes (`int(sigma)`), writable array copies from Pillow (`np.array` instead of read-only views), and warning-free numerical operations across all algorithms.
+- **NumPy 2.x compatibility** → Fixed float kernel sizes (`int(sigma)`), explicit array typing, and warning-free numerical operations across all algorithms.
 
 ### Results
 <p align='center'>
