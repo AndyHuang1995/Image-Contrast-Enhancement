@@ -32,14 +32,39 @@ def test_ying_matches_reference(img_name, max_mae):
     assert mae < max_mae
 
 
-def test_ying_pcg_matches_direct_solver():
+@pytest.mark.parametrize("boundary", ["neumann", "periodic"])
+def test_ying_pcg_matches_direct_solver(boundary):
     img = iio.imread(REPO_ROOT / "testdata" / "01.jpg")
-    out_pcg = ying.Ying_2017_CAIP(img, solver="pcg")
-    out_direct = ying.Ying_2017_CAIP(img, solver="direct")
+    out_pcg = ying.Ying_2017_CAIP(img, solver="pcg", boundary=boundary)
+    out_direct = ying.Ying_2017_CAIP(img, solver="direct", boundary=boundary)
 
     diff = np.abs(out_pcg.astype(np.int16) - out_direct.astype(np.int16))
     assert diff.max() <= 2
     assert diff.mean() < 0.1
+
+
+def test_ying_neumann_eliminates_border_wrap_halo():
+    # Bright top half (sky) over dark bottom half (ground)
+    sky_ground = np.full((64, 64), 0.1, dtype=np.float64)
+    sky_ground[:32, :] = 1.0
+
+    s_neumann = ying.tsmooth(sky_ground, lamda=0.5, sigma=5, boundary="neumann")
+    s_periodic = ying.tsmooth(sky_ground, lamda=0.5, sigma=5, boundary="periodic")
+
+    # Periodic bleeds bottom darkness into top row (creating a border halo dip);
+    # Neumann stays monotonic with no wrap-around bleeding.
+    assert s_neumann[0, 32] >= s_neumann[15, 32] - 1e-3
+    assert s_neumann[-1, 32] <= s_neumann[48, 32] + 1e-3
+    assert s_periodic[0, 32] < s_periodic[15, 32] - 0.005
+    assert s_neumann[0, 32] > s_periodic[0, 32] + 0.015
+    assert s_neumann[-1, 32] < s_periodic[-1, 32] - 0.015
+
+
+def test_ying_tunable_parameters():
+    img = iio.imread(REPO_ROOT / "testdata" / "01.jpg")
+    out = ying.Ying_2017_CAIP(img, lamda=0.3, sigma=3, k_max=3.0)
+    assert out.shape == img.shape
+    assert out.dtype == np.uint8
 
 
 def test_ying_uint8_lut_matches_float_path():
@@ -121,6 +146,8 @@ def test_ying_invalid_inputs():
         ying.Ying_2017_CAIP(np.zeros((10,), dtype=np.uint8))
     with pytest.raises(ValueError):
         ying.Ying_2017_CAIP(np.zeros((16, 16, 3), dtype=np.uint8), solver="unknown")
+    with pytest.raises(ValueError):
+        ying.Ying_2017_CAIP(np.zeros((16, 16, 3), dtype=np.uint8), boundary="unknown")
 
 
 def test_ying_cli(tmp_path):

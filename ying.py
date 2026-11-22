@@ -36,16 +36,20 @@ def _box_sum_1d(arr, kernel_size, axis):
     return cs[kernel_size:, :] - cs[:-kernel_size, :]
 
 
-def computeTextureWeights(fin, sigma, sharpness):
+def computeTextureWeights(fin, sigma, sharpness, boundary="neumann"):
     """Compute horizontal and vertical relative total variation texture weights."""
+    if boundary not in ("neumann", "periodic"):
+        raise ValueError(
+            f"Unsupported boundary: {boundary!r}. Expected 'neumann' or 'periodic'."
+        )
     kernel_size = max(1, int(sigma))
     dt0_v = np.empty_like(fin)
     dt0_v[:-1, :] = fin[1:, :] - fin[:-1, :]
-    dt0_v[-1, :] = fin[0, :] - fin[-1, :]
+    dt0_v[-1, :] = 0.0 if boundary == "neumann" else fin[0, :] - fin[-1, :]
 
     dt0_h = np.empty_like(fin)
     dt0_h[:, :-1] = fin[:, 1:] - fin[:, :-1]
-    dt0_h[:, -1] = fin[:, 0] - fin[:, -1]
+    dt0_h[:, -1] = 0.0 if boundary == "neumann" else fin[:, 0] - fin[:, -1]
 
     gauker_h = _box_sum_1d(dt0_h, kernel_size, axis=1)
     gauker_v = _box_sum_1d(dt0_v, kernel_size, axis=0)
@@ -55,16 +59,25 @@ def computeTextureWeights(fin, sigma, sharpness):
     return W_h, W_v
 
 
-def _solve_pcg(IN, wx, wy, lamda, rtol=5e-3, maxiter=500):
+def _solve_pcg(IN, wx, wy, lamda, rtol=5e-3, maxiter=500, boundary="neumann"):
     """Solve (I + lamda * L) x = IN via matrix-free float32 Jacobi-PCG."""
     wx_m = (-lamda * wx).astype(np.float32)
     wy_m = (-lamda * wy).astype(np.float32)
-    wx_l = np.roll(wx_m, 1, axis=1)
-    wy_u = np.roll(wy_m, 1, axis=0)
 
-    diag = (1.0 - (wx_m + wy_m + wx_l + wy_u)).astype(np.float32)
+    if boundary == "neumann":
+        wx_m[:, -1] = 0.0
+        wy_m[-1, :] = 0.0
+        diag = np.ones(IN.shape, dtype=np.float32)
+        diag -= wx_m
+        diag -= wy_m
+        diag[:, 1:] -= wx_m[:, :-1]
+        diag[1:, :] -= wy_m[:-1, :]
+    else:
+        wx_l = np.roll(wx_m, 1, axis=1)
+        wy_u = np.roll(wy_m, 1, axis=0)
+        diag = (1.0 - (wx_m + wy_m + wx_l + wy_u)).astype(np.float32)
+
     inv_diag = 1.0 / diag
-
     b = np.asarray(IN, dtype=np.float32)
     b_flat = b.ravel()
     b_norm_sq = float(np.dot(b_flat, b_flat))
@@ -77,13 +90,14 @@ def _solve_pcg(IN, wx, wy, lamda, rtol=5e-3, maxiter=500):
     def apply_A(u, out):
         np.multiply(diag, u, out=out)
         out[:, :-1] += wx_m[:, :-1] * u[:, 1:]
-        out[:, -1] += wx_m[:, -1] * u[:, 0]
-        out[:, 1:] += wx_l[:, 1:] * u[:, :-1]
-        out[:, 0] += wx_l[:, 0] * u[:, -1]
+        out[:, 1:] += wx_m[:, :-1] * u[:, :-1]
         out[:-1, :] += wy_m[:-1, :] * u[1:, :]
-        out[-1, :] += wy_m[-1, :] * u[0, :]
-        out[1:, :] += wy_u[1:, :] * u[:-1, :]
-        out[0, :] += wy_u[0, :] * u[-1, :]
+        out[1:, :] += wy_m[:-1, :] * u[:-1, :]
+        if boundary == "periodic":
+            out[:, -1] += wx_m[:, -1] * u[:, 0]
+            out[:, 0] += wx_l[:, 0] * u[:, -1]
+            out[-1, :] += wy_m[-1, :] * u[0, :]
+            out[0, :] += wy_u[0, :] * u[-1, :]
         return out
 
     r_vec = b - apply_A(x, Ap)
@@ -117,30 +131,38 @@ def _solve_pcg(IN, wx, wy, lamda, rtol=5e-3, maxiter=500):
     return x.astype(np.float64)
 
 
-def _solve_direct(IN, wx, wy, lamda):
+def _solve_direct(IN, wx, wy, lamda, boundary="neumann"):
     """Exact sparse LU solve for (I + lamda * L) x = IN."""
     r, c = IN.shape
     k = r * c
     wx_c = wx.copy()
     wy_c = wy.copy()
 
-    dx = -lamda * wx_c.flatten("F")
-    dy = -lamda * wy_c.flatten("F")
-    dxa = -lamda * np.roll(wx_c, 1, axis=1).flatten("F")
-    dya = -lamda * np.roll(wy_c, 1, axis=0).flatten("F")
+    if boundary == "neumann":
+        wx_c[:, -1] = 0.0
+        wy_c[-1, :] = 0.0
+        dx = -lamda * wx_c.flatten("F")
+        dy = -lamda * wy_c.flatten("F")
+        dxa = -lamda * np.roll(wx_c, 1, axis=1).flatten("F")
+        dya = -lamda * np.roll(wy_c, 1, axis=0).flatten("F")
+        Ax = sparse.spdiags(dx, -r, k, k)
+        Ay = sparse.spdiags(dy, -1, k, k)
+    else:
+        dx = -lamda * wx_c.flatten("F")
+        dy = -lamda * wy_c.flatten("F")
+        dxa = -lamda * np.roll(wx_c, 1, axis=1).flatten("F")
+        dya = -lamda * np.roll(wy_c, 1, axis=0).flatten("F")
+        tempx = np.concatenate((wx_c[:, -1:], np.zeros((r, c - 1))), axis=1)
+        tempy = np.concatenate((wy_c[-1:, :], np.zeros((r - 1, c))), axis=0)
+        dxd1 = -lamda * tempx.flatten("F")
+        dyd1 = -lamda * tempy.flatten("F")
+        wx_c[:, -1] = 0.0
+        wy_c[-1, :] = 0.0
+        dxd2 = -lamda * wx_c.flatten("F")
+        dyd2 = -lamda * wy_c.flatten("F")
+        Ax = sparse.spdiags(np.vstack((dxd1, dxd2)), np.array([-k + r, -r]), k, k)
+        Ay = sparse.spdiags(np.vstack((dyd1, dyd2)), np.array([-r + 1, -1]), k, k)
 
-    tempx = np.concatenate((wx_c[:, -1:], np.zeros((r, c - 1))), axis=1)
-    tempy = np.concatenate((wy_c[-1:, :], np.zeros((r - 1, c))), axis=0)
-    dxd1 = -lamda * tempx.flatten("F")
-    dyd1 = -lamda * tempy.flatten("F")
-
-    wx_c[:, -1] = 0
-    wy_c[-1, :] = 0
-    dxd2 = -lamda * wx_c.flatten("F")
-    dyd2 = -lamda * wy_c.flatten("F")
-
-    Ax = sparse.spdiags(np.vstack((dxd1, dxd2)), np.array([-k + r, -r]), k, k)
-    Ay = sparse.spdiags(np.vstack((dyd1, dyd2)), np.array([-r + 1, -1]), k, k)
     D = 1.0 - (dx + dy + dxa + dya)
     A = ((Ax + Ay) + (Ax + Ay).T + sparse.spdiags(D, 0, k, k)).T.tocsc()
 
@@ -148,20 +170,30 @@ def _solve_direct(IN, wx, wy, lamda):
     return np.reshape(tout, (r, c), order="F")
 
 
-def solveLinearEquation(IN, wx, wy, lamda, solver="pcg", rtol=5e-3, maxiter=500):
+def solveLinearEquation(
+    IN, wx, wy, lamda, solver="pcg", rtol=5e-3, maxiter=500, boundary="neumann"
+):
     """Solve the weighted least squares smoothing linear system."""
+    if boundary not in ("neumann", "periodic"):
+        raise ValueError(
+            f"Unsupported boundary: {boundary!r}. Expected 'neumann' or 'periodic'."
+        )
     if solver == "pcg":
-        return _solve_pcg(IN, wx, wy, lamda, rtol=rtol, maxiter=maxiter)
+        return _solve_pcg(
+            IN, wx, wy, lamda, rtol=rtol, maxiter=maxiter, boundary=boundary
+        )
     if solver == "direct":
-        return _solve_direct(IN, wx, wy, lamda)
+        return _solve_direct(IN, wx, wy, lamda, boundary=boundary)
     raise ValueError(f"Unsupported solver: {solver!r}. Expected 'pcg' or 'direct'.")
 
 
-def tsmooth(img, lamda=0.01, sigma=3, sharpness=0.001, solver="pcg"):
+def tsmooth(
+    img, lamda=0.01, sigma=3, sharpness=0.001, solver="pcg", boundary="neumann"
+):
     """Smooth illumination map via relative total variation."""
     I = cv2.normalize(img.astype(np.float64), None, 0.0, 1.0, cv2.NORM_MINMAX)
-    wx, wy = computeTextureWeights(I, sigma, sharpness)
-    return solveLinearEquation(I, wx, wy, lamda, solver=solver)
+    wx, wy = computeTextureWeights(I, sigma, sharpness, boundary=boundary)
+    return solveLinearEquation(I, wx, wy, lamda, solver=solver, boundary=boundary)
 
 
 def rgb2gm(I):
@@ -190,7 +222,7 @@ def entropy(X):
     return float(-np.sum(pk * np.log2(pk)))
 
 
-def _estimate_exposure_ratio(I, isBad, a=-0.3293, b=1.1258):
+def _estimate_exposure_ratio(I, isBad, a=-0.3293, b=1.1258, k_max=7.0):
     """Estimate optimal exposure ratio k maximizing entropy in under-exposed regions."""
     tmp = cv2.resize(I, (50, 50), interpolation=cv2.INTER_AREA)
     tmp = np.maximum(tmp.real, 0.0)
@@ -201,19 +233,30 @@ def _estimate_exposure_ratio(I, isBad, a=-0.3293, b=1.1258):
     if Y.size == 0:
         return None
 
-    return float(optimize.fminbound(lambda k: -entropy(applyK(Y, k, a, b)), 1.0, 7.0))
+    return float(
+        optimize.fminbound(lambda k: -entropy(applyK(Y, k, a, b)), 1.0, float(k_max))
+    )
 
 
-def maxEntropyEnhance(I, isBad, a=-0.3293, b=1.1258):
+def maxEntropyEnhance(I, isBad, a=-0.3293, b=1.1258, k_max=7.0):
     """Enhance under-exposed regions by maximizing entropy over exposure ratio k."""
-    opt_k = _estimate_exposure_ratio(I, isBad, a=a, b=b)
+    opt_k = _estimate_exposure_ratio(I, isBad, a=a, b=b, k_max=k_max)
     if opt_k is None:
         return I
     return applyK(I, opt_k, a, b) - 0.01
 
 
 def Ying_2017_CAIP(
-    img, mu=0.5, a=-0.3293, b=1.1258, solver="pcg", max_smooth_size=480
+    img,
+    mu=0.5,
+    a=-0.3293,
+    b=1.1258,
+    lamda=0.5,
+    sigma=5,
+    k_max=7.0,
+    solver="pcg",
+    boundary="neumann",
+    max_smooth_size=480,
 ):
     """Enhance image contrast using Ying et al. (CAIP 2017) Exposure Fusion Framework."""
     if img.ndim == 2:
@@ -224,9 +267,6 @@ def Ying_2017_CAIP(
         src = img[:, :, :3]
     else:
         raise ValueError(f"Unsupported image shape: {img.shape}")
-
-    lamda = 0.5
-    sigma = 5
 
     # Fast 256-entry LUT path for uint8 inputs avoids full-image float pow in applyK
     norm_lut = None
@@ -249,7 +289,9 @@ def Ying_2017_CAIP(
     scale = 0.5
     if max_smooth_size is not None and max_smooth_size > 0:
         scale = min(scale, max_smooth_size / max(t_b.shape))
-    t_smooth = tsmooth(imresize_bicubic(t_b, scale), lamda, sigma, solver=solver)
+    t_smooth = tsmooth(
+        imresize_bicubic(t_b, scale), lamda, sigma, solver=solver, boundary=boundary
+    )
     t_our = cv2.resize(
         t_smooth.astype(np.float32),
         (t_b.shape[1], t_b.shape[0]),
@@ -259,14 +301,14 @@ def Ying_2017_CAIP(
     # Apply camera model with optimal exposure ratio k
     isBad = t_our < 0.5
     if norm_lut is not None:
-        opt_k = _estimate_exposure_ratio(I, isBad, a=a, b=b)
+        opt_k = _estimate_exposure_ratio(I, isBad, a=a, b=b, k_max=k_max)
         if opt_k is None:
             J = I
         else:
             j_lut = (applyK(norm_lut, opt_k, a, b) - 0.01).astype(np.float32)
             J = j_lut[src]
     else:
-        J = maxEntropyEnhance(I, isBad, a=a, b=b)
+        J = maxEntropyEnhance(I, isBad, a=a, b=b, k_max=k_max)
 
     # Exposure fusion weight matrix
     W = np.maximum(t_our, 0.0) ** mu
@@ -291,10 +333,34 @@ def parse_args():
         help="Weight matrix exponent parameter (default: 0.5)",
     )
     parser.add_argument(
+        "--lamda",
+        type=float,
+        default=0.5,
+        help="Illumination smoothing regularization weight (default: 0.5)",
+    )
+    parser.add_argument(
+        "--sigma",
+        type=int,
+        default=5,
+        help="Texture window size for illumination smoothing (default: 5)",
+    )
+    parser.add_argument(
+        "--k-max",
+        type=float,
+        default=7.0,
+        help="Upper bound for optimal exposure ratio k search (default: 7.0)",
+    )
+    parser.add_argument(
         "--solver",
         choices=["pcg", "direct"],
         default="pcg",
         help="Linear solver for illumination smoothing (default: pcg)",
+    )
+    parser.add_argument(
+        "--boundary",
+        choices=["neumann", "periodic"],
+        default="neumann",
+        help="Boundary condition for illumination smoothing (default: neumann)",
     )
     parser.add_argument(
         "--max-smooth-size",
@@ -318,7 +384,14 @@ def main():
     img = iio.imread(args.input_image)
     max_smooth_size = args.max_smooth_size if args.max_smooth_size > 0 else None
     result = Ying_2017_CAIP(
-        img, mu=args.mu, solver=args.solver, max_smooth_size=max_smooth_size
+        img,
+        mu=args.mu,
+        lamda=args.lamda,
+        sigma=args.sigma,
+        k_max=args.k_max,
+        solver=args.solver,
+        boundary=args.boundary,
+        max_smooth_size=max_smooth_size,
     )
 
     if args.output:
