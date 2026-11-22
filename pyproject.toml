@@ -18,5 +18,14 @@ dependencies = [
     "scipy>=1.13.0,<2.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0,<9.0.0",
+]
+
 [tool.setuptools]
 py-modules = ["he", "dhe", "ying"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
