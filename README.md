@@ -54,8 +54,9 @@ python he.py testdata/01.jpg
 
 Save output directly to a file (with `--no-show` for headless/batch runs) and algorithm options:
 ```bash
-# Ying (2017): default matrix-free PCG solver (or --solver direct for exact sparse LU)
-python ying.py testdata/01.jpg --mu 0.5 --solver pcg -o output/01_ying.jpg --no-show
+# Ying (2017): matrix-free PCG + Neumann boundary by default
+# Optional: --solver direct, --boundary periodic, --max-smooth-size 480 (0=uncapped), --lamda, --sigma, --k-max
+python ying.py testdata/01.jpg --mu 0.5 --solver pcg --boundary neumann -o output/01_ying.jpg --no-show
 
 # DHE: adjust saturation/intensity weighting with --alpha
 python dhe.py testdata/01.jpg --alpha 0.5 -o output/01_dhe.jpg --no-show
@@ -70,7 +71,7 @@ Install test dependencies and run `pytest`:
 pip install -e ".[dev]"
 pytest -v
 ```
-Tests under `tests/` cover reference regression (`testdata/` vs `result/`), numerical equivalence of vectorized helpers and solvers, edge cases (grayscale, RGBA alpha preservation, flat/tiny images), and CLI execution.
+Tests under `tests/` cover reference regression (`testdata/` vs `result/`), numerical equivalence of vectorized helpers and solvers, Neumann border-halo prevention, edge cases (grayscale, RGBA alpha preservation, flat/tiny images), and CLI execution.
 
 ### Algorithm Optimizations
 Measured on Apple Silicon (`testdata/01.jpg` `640×480` and `testdata/03.jpg` `960×720`):
@@ -79,7 +80,7 @@ Measured on Apple Silicon (`testdata/01.jpg` `640×480` and `testdata/03.jpg` `9
 |---|---|---|---|---|
 | `he.py` | `np.bincount` CDF lookup table + optional `--mode ycrcb` | `18 ms` → **`3.3 ms`** | `57 ms` → **`6.5 ms`** | **~6–9×** |
 | `dhe.py` | Vectorized exact `int64` 5×5 box-sum correlation, Sobel slicing, `np.bincount` histograms, 256-entry LUT, single OpenCV HSV pass | `4836 ms` → **`20.4 ms`** | `~10+ s` → **`45.1 ms`** | **~230×** |
-| `ying.py` | Matrix-free `float32` Jacobi-PCG solver (replacing SuperLU `spsolve` by default; `1080p`: `17.0 s` → `288 ms`), cumsum 1D texture weights, `np.bincount` entropy, broadcasted fusion weights | `797 ms` → **`48.8 ms`** | `3069 ms` → **`97.2 ms`** | **~16–59×** |
+| `ying.py` | Matrix-free `float32` Jacobi-PCG + Neumann boundary, 256-entry `uint8` LUT for `applyK`, adaptive smoothing grid cap (`1080p`: `17.0 s` → **`113 ms`**), cumsum 1D texture weights, `np.bincount` entropy | `825 ms` → **`42.7 ms`** | `3056 ms` → **`80.8 ms`** | **~19–150×** |
 
 All three scripts also support grayscale and RGBA (preserving the alpha channel), handle flat/degenerate images safely, and lazy-import `matplotlib.pyplot` only when displaying a window.
 
