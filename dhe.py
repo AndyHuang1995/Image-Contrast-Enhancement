@@ -1,98 +1,117 @@
 import argparse
 from pathlib import Path
 
+import cv2
 import imageio.v3 as iio
-import matplotlib.colors
-import matplotlib.pyplot as plt
 import numpy as np
-from scipy import signal
+
+
+def _box_sum_5x5(arr):
+    """Compute exact valid 5x5 window sums via separable 1D slicing."""
+    h_sum = arr[:, :-4] + arr[:, 1:-3] + arr[:, 2:-2] + arr[:, 3:-1] + arr[:, 4:]
+    return h_sum[:-4] + h_sum[1:-3] + h_sum[2:-2] + h_sum[3:-1] + h_sum[4:]
+
+
+def _sobel_mag(arr):
+    """Compute Sobel gradient magnitude on the interior [2:-2, 2:-2] of a 2px-padded array."""
+    gx = (
+        (arr[1:-3, 3:-1] - arr[1:-3, 1:-3])
+        + 2 * (arr[2:-2, 3:-1] - arr[2:-2, 1:-3])
+        + (arr[3:-1, 3:-1] - arr[3:-1, 1:-3])
+    )
+    gy = (
+        (arr[3:-1, 1:-3] - arr[1:-3, 1:-3])
+        + 2 * (arr[3:-1, 2:-2] - arr[1:-3, 2:-2])
+        + (arr[3:-1, 3:-1] - arr[1:-3, 3:-1])
+    )
+    return np.hypot(gx, gy).astype(np.uint32)
+
+
+def _build_is_hist_from_si(s_u8, i_u8):
+    S = np.pad(s_u8, 2, mode="edge").astype(np.int64)
+    I = np.pad(i_u8, 2, mode="edge").astype(np.int64)
+
+    di = _sobel_mag(I)
+    ds = _sobel_mag(S)
+
+    sum_I = _box_sum_5x5(I)
+    sum_S = _box_sum_5x5(S)
+    sum_II = _box_sum_5x5(I * I)
+    sum_SS = _box_sum_5x5(S * S)
+    sum_IS = _box_sum_5x5(I * S)
+
+    num = 25 * sum_IS - sum_I * sum_S
+    var_I = 25 * sum_II - sum_I * sum_I
+    var_S = 25 * sum_SS - sum_S * sum_S
+    denom = np.sqrt(var_I.astype(np.float64) * var_S.astype(np.float64))
+    rho = np.divide(np.abs(num), denom, out=np.zeros_like(denom), where=denom > 0)
+
+    rd = (rho * ds).astype(np.uint32)
+
+    hist_i = np.zeros((256, 1), dtype=np.float64)
+    hist_s = np.zeros((256, 1), dtype=np.float64)
+    flat_i = i_u8.ravel()
+    hist_i[1:, 0] = np.bincount(flat_i, weights=di.ravel(), minlength=256)[:255]
+    hist_s[1:, 0] = np.bincount(flat_i, weights=rd.ravel(), minlength=256)[:255]
+    return hist_i, hist_s
 
 
 def build_is_hist(img):
-    hei = img.shape[0]
-    wid = img.shape[1]
-    ch = img.shape[2]
-    Img = np.zeros((hei + 4, wid + 4, ch))
-    for i in range(ch):
-        Img[:, :, i] = np.pad(img[:, :, i], (2, 2), "edge")
-    hsv = matplotlib.colors.rgb_to_hsv(Img)
-    hsv[:, :, 0] = hsv[:, :, 0] * 255
-    hsv[:, :, 1] = hsv[:, :, 1] * 255
-    hsv = np.clip(hsv, 0, 255).astype(np.uint8).astype(np.float64)
-    fh = np.array([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]])
-    fv = fh.conj().T
-
-    H = hsv[:, :, 0]
-    S = hsv[:, :, 1]
-    I = hsv[:, :, 2]
-
-    dIh = signal.convolve2d(I, np.rot90(fh, 2), mode="same")
-    dIv = signal.convolve2d(I, np.rot90(fv, 2), mode="same")
-    dIh[dIh == 0] = 0.00001
-    dIv[dIv == 0] = 0.00001
-    dI = np.sqrt(dIh**2 + dIv**2).astype(np.uint32)
-    di = dI[2 : hei + 2, 2 : wid + 2]
-
-    dSh = signal.convolve2d(S, np.rot90(fh, 2), mode="same")
-    dSv = signal.convolve2d(S, np.rot90(fv, 2), mode="same")
-    dSh[dSh == 0] = 0.00001
-    dSv[dSv == 0] = 0.00001
-    dS = np.sqrt(dSh**2 + dSv**2).astype(np.uint32)
-    ds = dS[2 : hei + 2, 2 : wid + 2]
-
-    i = I[2 : hei + 2, 2 : wid + 2].astype(np.uint8)
-
-    Rho = np.zeros((hei + 4, wid + 4))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        for p in range(2, hei + 2):
-            for q in range(2, wid + 2):
-                tmpi = I[p - 2 : p + 3, q - 2 : q + 3]
-                tmps = S[p - 2 : p + 3, q - 2 : q + 3]
-                corre = np.corrcoef(tmpi.flatten("F"), tmps.flatten("F"))
-                Rho[p, q] = corre[0, 1]
-
-    rho = np.abs(Rho[2 : hei + 2, 2 : wid + 2])
-    rho[np.isnan(rho)] = 0
-    rd = (rho * ds).astype(np.uint32)
-    Hist_I = np.zeros((256, 1))
-    Hist_S = np.zeros((256, 1))
-
-    for n in range(0, 255):
-        temp = np.zeros(di.shape)
-        temp[i == n] = di[i == n]
-        Hist_I[n + 1, 0] = np.sum(temp.flatten("F"))
-        temp = np.zeros(di.shape)
-        temp[i == n] = rd[i == n]
-        Hist_S[n + 1, 0] = np.sum(temp.flatten("F"))
-
-    return Hist_I, Hist_S
+    """Build intensity and saturation gradient-weighted histograms."""
+    if img.ndim == 2:
+        i_u8 = np.clip(img, 0, 255).astype(np.uint8)
+        s_u8 = np.zeros_like(i_u8)
+    elif img.ndim == 3 and img.shape[2] >= 3:
+        hsv = cv2.cvtColor(np.asarray(img[:, :, :3], dtype=np.float32), cv2.COLOR_RGB2HSV)
+        s_u8 = np.clip(hsv[:, :, 1] * 255.0, 0, 255).astype(np.uint8)
+        i_u8 = np.clip(hsv[:, :, 2], 0, 255).astype(np.uint8)
+    else:
+        raise ValueError(f"Unsupported image shape: {img.shape}")
+    return _build_is_hist_from_si(s_u8, i_u8)
 
 
 def dhe(img, alpha=0.5):
-    if img.ndim == 3 and img.shape[2] == 4:
-        img = img[:, :, :3]
+    """Apply Dynamic Histogram Equalization (DHE) using HSV intensity-saturation correlation."""
+    if img.ndim == 2:
+        i_u8 = np.clip(img, 0, 255).astype(np.uint8)
+        s_u8 = np.zeros_like(i_u8)
+        hist_i, hist_s = _build_is_hist_from_si(s_u8, i_u8)
+        hist_c = alpha * hist_s + (1.0 - alpha) * hist_i
+        hist_sum = hist_c.sum()
+        if hist_sum == 0:
+            return i_u8.copy()
+        lut = np.empty(256, dtype=np.uint8)
+        lut[:255] = np.clip(
+            hist_c.cumsum()[1:] * (255.0 / hist_sum), 0, 255
+        ).astype(np.uint8)
+        lut[255] = 255
+        return lut[i_u8]
 
-    hist_i, hist_s = build_is_hist(img)
-    hist_c = alpha * hist_s + (1 - alpha) * hist_i
-    hist_sum = np.sum(hist_c)
+    if img.ndim != 3 or img.shape[2] not in (3, 4):
+        raise ValueError(f"Unsupported image shape: {img.shape}")
+
+    has_alpha = img.shape[2] == 4
+    rgb = img[:, :, :3]
+    hsv = cv2.cvtColor(np.asarray(rgb, dtype=np.float32), cv2.COLOR_RGB2HSV)
+    s_u8 = np.clip(hsv[:, :, 1] * 255.0, 0, 255).astype(np.uint8)
+    i_u8 = np.clip(hsv[:, :, 2], 0, 255).astype(np.uint8)
+
+    hist_i, hist_s = _build_is_hist_from_si(s_u8, i_u8)
+    hist_c = alpha * hist_s + (1.0 - alpha) * hist_i
+    hist_sum = hist_c.sum()
+    if hist_sum == 0:
+        return np.clip(img, 0, 255).astype(np.uint8)
+
     hist_cum = hist_c.cumsum(axis=0)
+    lut = np.empty(256, dtype=np.float32)
+    lut[:255] = (hist_cum[1:, 0] * (255.0 / hist_sum)).astype(np.float32)
+    lut[255] = 255.0
 
-    hsv = matplotlib.colors.rgb_to_hsv(np.asarray(img, dtype=np.float64))
-    h = hsv[:, :, 0]
-    s = hsv[:, :, 1]
-    i = hsv[:, :, 2].astype(np.uint8)
-
-    c = hist_cum / hist_sum
-    s_r = c * 255
-    i_s = np.zeros(i.shape)
-    for n in range(0, 255):
-        i_s[i == n] = s_r[n + 1, 0] / 255.0
-    i_s[i == 255] = 1
-    hsi_o = np.stack((h, s, i_s), axis=2)
-    result = matplotlib.colors.hsv_to_rgb(hsi_o)
-
-    result = np.clip(result * 255, 0, 255)
-    return result.astype(np.uint8)
+    hsv[:, :, 2] = lut[i_u8]
+    result = np.clip(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB), 0, 255).astype(np.uint8)
+    if has_alpha:
+        return np.concatenate((result, img[:, :, 3:4].astype(np.uint8)), axis=2)
+    return result
 
 
 def parse_args():
@@ -128,7 +147,9 @@ def main():
         iio.imwrite(output_path, result)
 
     if not args.no_show:
-        plt.imshow(result)
+        import matplotlib.pyplot as plt
+
+        plt.imshow(result, cmap="gray" if result.ndim == 2 else None)
         plt.axis("off")
         plt.show()
 
