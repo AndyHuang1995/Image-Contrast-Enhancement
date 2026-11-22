@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-contrast-enhancement"
+version = "0.2.0"
+description = "Python implementations of HE, DHE, and Ying (2017) Exposure Fusion Framework for image contrast enhancement"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "imageio>=2.34.0,<3.0.0",
+    "matplotlib>=3.9.0,<4.0.0",
+    "numpy>=1.26.0,<3.0.0",
+    "opencv-python>=4.10.0,<5.0.0",
+    "pillow>=10.4.0,<13.0.0",
+    "scikit-image>=0.24.0,<1.0.0",
+    "scipy>=1.13.0,<2.0.0",
+]
+
+[tool.setuptools]
+py-modules = ["he", "dhe", "ying"]
