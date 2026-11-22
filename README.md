@@ -1,4 +1,6 @@
 # Image-Contrast-Enhancement
+[![CI](https://github.com/AndyHuang1995/Image-Contrast-Enhancement/actions/workflows/ci.yml/badge.svg)](https://github.com/AndyHuang1995/Image-Contrast-Enhancement/actions/workflows/ci.yml)
+
 Python implementations of "[A New Image Contrast Enhancement Algorithm Using Exposure Fusion Framework](https://baidut.github.io/OpenCE/caip2017.html)"
 
 ### Already Implemented
