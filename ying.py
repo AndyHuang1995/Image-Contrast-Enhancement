@@ -190,7 +190,7 @@ def entropy(X):
     return float(-np.sum(pk * np.log2(pk)))
 
 
-def maxEntropyEnhance(I, isBad, a=-0.3293, b=1.1258):
+def _estimate_exposure_ratio(I, isBad, a=-0.3293, b=1.1258):
     """Estimate optimal exposure ratio k maximizing entropy in under-exposed regions."""
     tmp = cv2.resize(I, (50, 50), interpolation=cv2.INTER_AREA)
     tmp = np.maximum(tmp.real, 0.0)
@@ -199,13 +199,22 @@ def maxEntropyEnhance(I, isBad, a=-0.3293, b=1.1258):
     isBad_small = imresize_bicubic(isBad.astype(np.float32), (50, 50))
     Y = Y[isBad_small >= 0.5]
     if Y.size == 0:
-        return I
+        return None
 
-    opt_k = optimize.fminbound(lambda k: -entropy(applyK(Y, k, a, b)), 1.0, 7.0)
+    return float(optimize.fminbound(lambda k: -entropy(applyK(Y, k, a, b)), 1.0, 7.0))
+
+
+def maxEntropyEnhance(I, isBad, a=-0.3293, b=1.1258):
+    """Enhance under-exposed regions by maximizing entropy over exposure ratio k."""
+    opt_k = _estimate_exposure_ratio(I, isBad, a=a, b=b)
+    if opt_k is None:
+        return I
     return applyK(I, opt_k, a, b) - 0.01
 
 
-def Ying_2017_CAIP(img, mu=0.5, a=-0.3293, b=1.1258, solver="pcg"):
+def Ying_2017_CAIP(
+    img, mu=0.5, a=-0.3293, b=1.1258, solver="pcg", max_smooth_size=480
+):
     """Enhance image contrast using Ying et al. (CAIP 2017) Exposure Fusion Framework."""
     if img.ndim == 2:
         has_alpha = False
@@ -218,11 +227,29 @@ def Ying_2017_CAIP(img, mu=0.5, a=-0.3293, b=1.1258, solver="pcg"):
 
     lamda = 0.5
     sigma = 5
-    I = cv2.normalize(src.astype(np.float32), None, 0.0, 1.0, cv2.NORM_MINMAX)
 
-    # Weight matrix estimation
-    t_b = np.max(I, axis=2) if I.ndim == 3 else I
-    t_smooth = tsmooth(imresize_bicubic(t_b, 0.5), lamda, sigma, solver=solver)
+    # Fast 256-entry LUT path for uint8 inputs avoids full-image float pow in applyK
+    norm_lut = None
+    if src.dtype == np.uint8:
+        vmin = int(src.min())
+        vmax = int(src.max())
+        if vmax > vmin:
+            norm_lut = np.clip(
+                (np.arange(256, dtype=np.float32) - vmin) / (vmax - vmin), 0.0, 1.0
+            )
+        else:
+            norm_lut = np.zeros(256, dtype=np.float32)
+        I = norm_lut[src]
+        t_b = norm_lut[np.max(src, axis=2)] if src.ndim == 3 else I
+    else:
+        I = cv2.normalize(src.astype(np.float32), None, 0.0, 1.0, cv2.NORM_MINMAX)
+        t_b = np.max(I, axis=2) if I.ndim == 3 else I
+
+    # Weight matrix estimation with optional cap on smoothing grid size
+    scale = 0.5
+    if max_smooth_size is not None and max_smooth_size > 0:
+        scale = min(scale, max_smooth_size / max(t_b.shape))
+    t_smooth = tsmooth(imresize_bicubic(t_b, scale), lamda, sigma, solver=solver)
     t_our = cv2.resize(
         t_smooth.astype(np.float32),
         (t_b.shape[1], t_b.shape[0]),
@@ -231,7 +258,15 @@ def Ying_2017_CAIP(img, mu=0.5, a=-0.3293, b=1.1258, solver="pcg"):
 
     # Apply camera model with optimal exposure ratio k
     isBad = t_our < 0.5
-    J = maxEntropyEnhance(I, isBad, a=a, b=b)
+    if norm_lut is not None:
+        opt_k = _estimate_exposure_ratio(I, isBad, a=a, b=b)
+        if opt_k is None:
+            J = I
+        else:
+            j_lut = (applyK(norm_lut, opt_k, a, b) - 0.01).astype(np.float32)
+            J = j_lut[src]
+    else:
+        J = maxEntropyEnhance(I, isBad, a=a, b=b)
 
     # Exposure fusion weight matrix
     W = np.maximum(t_our, 0.0) ** mu
@@ -262,6 +297,12 @@ def parse_args():
         help="Linear solver for illumination smoothing (default: pcg)",
     )
     parser.add_argument(
+        "--max-smooth-size",
+        type=int,
+        default=480,
+        help="Max long-edge size for illumination smoothing grid; 0 disables cap (default: 480)",
+    )
+    parser.add_argument(
         "-o", "--output", help="Optional path to save the enhanced image"
     )
     parser.add_argument(
@@ -275,7 +316,10 @@ def parse_args():
 def main():
     args = parse_args()
     img = iio.imread(args.input_image)
-    result = Ying_2017_CAIP(img, mu=args.mu, solver=args.solver)
+    max_smooth_size = args.max_smooth_size if args.max_smooth_size > 0 else None
+    result = Ying_2017_CAIP(
+        img, mu=args.mu, solver=args.solver, max_smooth_size=max_smooth_size
+    )
 
     if args.output:
         output_path = Path(args.output)

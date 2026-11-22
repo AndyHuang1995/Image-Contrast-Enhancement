@@ -42,6 +42,24 @@ def test_ying_pcg_matches_direct_solver():
     assert diff.mean() < 0.1
 
 
+def test_ying_uint8_lut_matches_float_path():
+    img = iio.imread(REPO_ROOT / "testdata" / "01.jpg")
+    out_u8 = ying.Ying_2017_CAIP(img)
+    out_f32 = ying.Ying_2017_CAIP(img.astype(np.float32))
+    diff = np.abs(out_u8.astype(np.int16) - out_f32.astype(np.int16))
+    assert diff.max() <= 1
+    assert diff.mean() < 0.01
+
+
+def test_ying_max_smooth_size():
+    img = iio.imread(REPO_ROOT / "testdata" / "03.jpg")
+    out_uncapped = ying.Ying_2017_CAIP(img, max_smooth_size=None)
+    out_capped = ying.Ying_2017_CAIP(img, max_smooth_size=240)
+    assert out_capped.shape == img.shape
+    diff = np.abs(out_capped.astype(np.float64) - out_uncapped.astype(np.float64))
+    assert diff.mean() < 3.5
+
+
 @pytest.mark.parametrize("kernel_size", [1, 3, 4, 5, 7])
 def test_box_sum_1d_matches_convolve2d(kernel_size):
     rng = np.random.default_rng(7)
