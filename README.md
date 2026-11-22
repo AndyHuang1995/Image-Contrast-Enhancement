@@ -52,20 +52,44 @@ python dhe.py testdata/01.jpg
 python he.py testdata/01.jpg
 ```
 
-Save output directly to a file (optional `--no-show` for headless/batch runs):
+Save output directly to a file (with `--no-show` for headless/batch runs) and algorithm options:
 ```bash
-python ying.py testdata/01.jpg -o output/01_ying.jpg --no-show
-python dhe.py testdata/01.jpg -o output/01_dhe.jpg --no-show
-python he.py testdata/01.jpg -o output/01_he.jpg --no-show
+# Ying (2017): default matrix-free PCG solver (or --solver direct for exact sparse LU)
+python ying.py testdata/01.jpg --mu 0.5 --solver pcg -o output/01_ying.jpg --no-show
+
+# DHE: adjust saturation/intensity weighting with --alpha
+python dhe.py testdata/01.jpg --alpha 0.5 -o output/01_dhe.jpg --no-show
+
+# HE: per-channel RGB (default) or luminance-only YCrCb to preserve color
+python he.py testdata/01.jpg --mode ycrcb -o output/01_he.jpg --no-show
 ```
+
+### Testing
+Install test dependencies and run `pytest`:
+```bash
+pip install -e ".[dev]"
+pytest -v
+```
+Tests under `tests/` cover reference regression (`testdata/` vs `result/`), numerical equivalence of vectorized helpers and solvers, edge cases (grayscale, RGBA alpha preservation, flat/tiny images), and CLI execution.
+
+### Algorithm Optimizations
+Measured on Apple Silicon (`testdata/01.jpg` `640×480` and `testdata/03.jpg` `960×720`):
+
+| Algorithm | Key Optimization | `01.jpg` | `03.jpg` | Speedup |
+|---|---|---|---|---|
+| `he.py` | `np.bincount` CDF lookup table + optional `--mode ycrcb` | `18 ms` → **`3.3 ms`** | `57 ms` → **`6.5 ms`** | **~6–9×** |
+| `dhe.py` | Vectorized exact `int64` 5×5 box-sum correlation, Sobel slicing, `np.bincount` histograms, 256-entry LUT, single OpenCV HSV pass | `4836 ms` → **`20.4 ms`** | `~10+ s` → **`45.1 ms`** | **~230×** |
+| `ying.py` | Matrix-free `float32` Jacobi-PCG solver (replacing SuperLU `spsolve` by default; `1080p`: `17.0 s` → `288 ms`), cumsum 1D texture weights, `np.bincount` entropy, broadcasted fusion weights | `797 ms` → **`48.8 ms`** | `3069 ms` → **`97.2 ms`** | **~16–59×** |
+
+All three scripts also support grayscale and RGBA (preserving the alpha channel), handle flat/degenerate images safely, and lazy-import `matplotlib.pyplot` only when displaying a window.
 
 ### Modernization & API Migration Notes
 The codebase has been updated from its original 2020 dependencies (`scipy==1.2.2`, `numpy==1.18.2`, `imageio==2.8.0`, etc.) to modern Python & library versions:
 
-- **`scipy.misc.imresize` (removed in SciPy 1.3+)** → Replaced in `ying.py` with `imresize_bicubic()` using Pillow's `Image.fromarray(..., float32)` + `Image.Resampling.BICUBIC`, matching the original `mode='F', interp='bicubic'` behavior.
-- **Explicit SciPy submodule imports (SciPy 1.12+)** → Replaced implicit `scipy.sparse` / `scipy.optimize` access and removed deprecated `scipy.misc` imports with explicit imports (`from scipy import optimize, signal, sparse`, `from scipy.sparse.linalg import spsolve`). Converted sparse system matrix `A` to CSC format (`.tocsc()`) to eliminate `SparseEfficiencyWarning`.
+- **`scipy.misc.imresize` (removed in SciPy 1.3+)** → Replaced in `ying.py` with `imresize_bicubic()` using Pillow's `Image.fromarray(..., float32)` + `Image.Resampling.BICUBIC`.
+- **Explicit SciPy submodule imports (SciPy 1.12+)** → Replaced implicit `scipy.sparse` / `scipy.optimize` access and removed deprecated `scipy.misc` imports; direct solver converts `A` to CSC format (`.tocsc()`) to eliminate `SparseEfficiencyWarning`.
 - **`imageio.imread` (deprecated in ImageIO v2/v3)** → Migrated to `imageio.v3` (`iio.imread` / `iio.imwrite`) across `he.py`, `dhe.py`, and `ying.py`.
-- **NumPy 2.x / Matplotlib 3.9+ / Pillow 11+ compatibility** → Fixed float kernel size (`int(sigma)` in `np.ones`), explicit `float64` conversion before `matplotlib.colors.rgb_to_hsv` (fixes NumPy 2.0 `copy=False` `ValueError` on `uint8` images in `dhe.py`), writable array copy from Pillow (`np.array` instead of read-only `np.asarray` view in `ying.py`), explicit scalar indexing (`Hist_I[n + 1, 0]`, `s_r[n + 1, 0]`), and silenced expected zero-variance divide warnings in `np.corrcoef` (`dhe.py`).
+- **NumPy 2.x / Pillow 11+ compatibility** → Fixed float kernel sizes (`int(sigma)`), writable array copies from Pillow (`np.array` instead of read-only views), and warning-free numerical operations across all algorithms.
 
 ### Results
 <p align='center'>
