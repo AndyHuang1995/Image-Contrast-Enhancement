@@ -109,3 +109,6 @@ The codebase has been updated from its original 2020 dependencies (`scipy==1.2.2
   <img src='testdata/04.jpg' height='252' width='384'/>
   <img src='result/ying/04.jpg' height='252' width='384'/>
 </p>
+
+### License
+This project is licensed under the [MIT License](LICENSE).
